@@ -392,7 +392,7 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
               <Countdown
                 startDate={profile.program_start_date}
                 durationDays={profile.program_duration_days || 28}
-                size={90}
+                size={60}
               />
             </div>
           )}

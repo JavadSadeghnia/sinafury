@@ -170,6 +170,13 @@ function TrainingPage({ formData, goToStep }) {
     }
   }, [user?.id])
 
+  // Start the countdown when user first views a real training plan
+  useEffect(() => {
+    if (hasCustomProgram && !formData.programStartDate) {
+      api.startCountdown().catch(() => {})
+    }
+  }, [hasCustomProgram, formData.programStartDate])
+
   const toggleDone = (cellKey) => {
     setCompletedDays(prev => {
       const updated = { ...prev, [cellKey]: !prev[cellKey] }
@@ -408,7 +415,7 @@ function ProfilePage({ formData, goToStep }) {
 
         <div className="bg-dark-card border border-dark-border rounded-xl p-5 sm:p-6">
           <div className="flex items-center gap-3 mb-3">
-            <Package size={20} className="text-neon" />
+            <Package size={0} className="text-neon" />
             <h3 className="font-bold text-lg">Your Package</h3>
           </div>
           <div className="flex items-center justify-between gap-4">
@@ -423,7 +430,7 @@ function ProfilePage({ formData, goToStep }) {
               <Countdown
                 startDate={formData.programStartDate}
                 durationDays={formData.programDurationDays || 28}
-                size={65}
+                size={60}
               />
             )}
           </div>

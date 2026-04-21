@@ -82,6 +82,7 @@ export const api = {
   // Program notification
   getProgramUpdated: () => request('/profile/program-updated'),
   markProgramSeen: () => request('/profile/program-seen', { method: 'POST' }),
+  startCountdown: () => request('/profile/start-countdown', { method: 'POST' }),
 
   // Chat (user)
   getMessages: () => request('/chat'),

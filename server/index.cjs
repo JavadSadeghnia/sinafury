@@ -536,23 +536,36 @@ app.put('/api/admin/users/:id/program', adminAuth, (req, res) => {
     params.push(JSON.stringify(completedDays))
   }
 
-  // Set program_start_date on first program assignment (only if not already set)
-  try {
-    const startResult = db.exec('SELECT program_start_date FROM users WHERE id = ?', [req.params.id])
-    const currentStart = (startResult.length > 0 && startResult[0].values.length > 0) ? startResult[0].values[0][0] : null
-    if (!currentStart) {
-      // Check if program has any actual content (not all empty)
-      const hasContent = program.some(row => row.weeks?.some(w => w.label || w.description))
-      if (hasContent) {
-        updates.push("program_start_date = datetime('now')")
-      }
-    }
-  } catch {}
-
+  // Note: program_start_date is set when the user first views their Training Plan
   params.push(req.params.id)
   db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
   saveDB()
   res.json({ success: true })
+})
+
+// User starts their countdown by first viewing the Training Plan
+app.post('/api/profile/start-countdown', authenticate, (req, res) => {
+  try {
+    const result = db.exec('SELECT program_start_date, training_program FROM users WHERE id = ?', [req.user.id])
+    if (result.length === 0 || result[0].values.length === 0) return res.status(404).json({ error: 'Not found' })
+    const currentStart = result[0].values[0][0]
+    const program = result[0].values[0][1]
+    if (currentStart) return res.json({ success: true, alreadyStarted: true })
+
+    // Only start if there's a real program with content
+    let hasContent = false
+    try {
+      const p = JSON.parse(program || '[]')
+      hasContent = p.some(row => row.weeks?.some(w => w.label || w.description))
+    } catch {}
+    if (!hasContent) return res.json({ success: true, alreadyStarted: false })
+
+    db.run("UPDATE users SET program_start_date = datetime('now') WHERE id = ?", [req.user.id])
+    saveDB()
+    res.json({ success: true, started: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // ============ COMPLETED DAYS ============
