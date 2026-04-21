@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsof -ti:3001)",
+      "Bash(curl -L -o /Users/arezoughanekanafi/000/sinafury/public/body-front.jpg \"https://img.freepik.com/premium-photo/illustration-silhouette-man-against-white-background_19441-7875.jpg?w=1060\")",
+      "Bash(node -e ':*)",
+      "Bash(curl -L -o /Users/arezoughanekanafi/000/sinafury/public/silhouette-front.png \"https://img.freepik.com/premium-photo/illustration-silhouette-man-against-white-background_19441-7875.jpg?w=360\")",
+      "Bash(curl -L -o /Users/arezoughanekanafi/000/sinafury/public/silhouette-back.png \"https://img.freepik.com/premium-photo/illustration-silhouette-man-against-white-background_19441-7888.jpg?w=360\")",
+      "Bash(curl -L -o /Users/arezoughanekanafi/000/sinafury/public/silhouette-side.png \"https://img.freepik.com/premium-photo/illustration-silhouette-man-against-white-background_19441-7880.jpg?w=360\")",
+      "Bash(node /Users/arezoughanekanafi/000/sinafury/server/index.cjs)",
+      "Bash(curl -s http://localhost:3001/api/admin/signin -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin\"}')",
+      "Bash(node -e \"process.stdin.on\\('data',d=>{const p=JSON.parse\\(d\\).profile; console.log\\('edited_sections:', JSON.stringify\\(p.edited_sections\\)\\)}\\)\")"
+    ]
+  }
+}
