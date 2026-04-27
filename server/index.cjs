@@ -129,6 +129,9 @@ async function initDB() {
   try { db.exec("SELECT program_duration_days FROM users LIMIT 1") }
   catch { db.run("ALTER TABLE users ADD COLUMN program_duration_days INTEGER DEFAULT 28") }
 
+  try { db.exec("SELECT reminder_7day_sent FROM users LIMIT 1") }
+  catch { db.run("ALTER TABLE users ADD COLUMN reminder_7day_sent INTEGER DEFAULT 0") }
+
   // Fix old default training_days for users who never changed it
   db.run("UPDATE users SET training_days = '[]' WHERE training_days = '[\"Mon\",\"Wed\",\"Fri\"]'")
 
@@ -238,6 +241,26 @@ app.get('/api/auth/me', authenticate, (req, res) => {
 // ============ PROFILE ROUTES ============
 
 // Get profile
+// Helper: send 7-day reminder message if countdown <= 7 days and not already sent
+function checkAndSendReminder(userId, profile) {
+  if (!profile.program_start_date || profile.reminder_7day_sent) return
+  const start = new Date(profile.program_start_date.replace(' ', 'T') + 'Z')
+  const now = new Date()
+  const elapsedMs = now - start
+  const durationDays = profile.program_duration_days || 28
+  // TEST MODE: 1 day = 1 second
+  const totalMs = durationDays * 1000
+  const remainingMs = Math.max(0, totalMs - elapsedMs)
+  const daysLeft = Math.ceil(remainingMs / 1000)
+
+  if (daysLeft <= 7 && daysLeft > 0) {
+    const message = `Hi! Just a quick reminder — you've been training for 3 weeks, and you have 1 week left in your current program.\n\nIf you'd like to keep your schedule consistent without any gaps, you can extend your program now and secure your next 4 weeks in advance.`
+    db.run('INSERT INTO messages (user_id, sender, text) VALUES (?, ?, ?)', [userId, 'admin', message])
+    db.run("UPDATE users SET reminder_7day_sent = 1 WHERE id = ?", [userId])
+    saveDB()
+  }
+}
+
 app.get('/api/profile', authenticate, (req, res) => {
   const result = db.exec('SELECT * FROM users WHERE id = ?', [req.user.id])
   if (result.length === 0 || result[0].values.length === 0) {
@@ -248,6 +271,9 @@ app.get('/api/profile', authenticate, (req, res) => {
   const row = result[0].values[0]
   const profile = {}
   cols.forEach((col, i) => { profile[col] = row[i] })
+
+  // Check and send 7-day reminder if needed
+  checkAndSendReminder(req.user.id, profile)
 
   // Parse JSON arrays
   try { profile.goals = JSON.parse(profile.goals || '[]') } catch { profile.goals = [] }
@@ -691,6 +717,18 @@ app.post('/api/chat/image', authenticate, chatUpload.single('file'), (req, res) 
 
 // Get unread count (user - messages from admin they haven't read)
 app.get('/api/chat/unread', authenticate, (req, res) => {
+  // Check countdown reminder on every poll
+  try {
+    const profResult = db.exec('SELECT program_start_date, program_duration_days, reminder_7day_sent FROM users WHERE id = ?', [req.user.id])
+    if (profResult.length > 0 && profResult[0].values.length > 0) {
+      const cols = profResult[0].columns
+      const row = profResult[0].values[0]
+      const profile = {}
+      cols.forEach((col, i) => { profile[col] = row[i] })
+      checkAndSendReminder(req.user.id, profile)
+    }
+  } catch {}
+
   const readResult = db.exec("SELECT last_read_id FROM chat_read WHERE user_id = ? AND reader = 'user'", [req.user.id])
   const lastRead = (readResult.length > 0 && readResult[0].values.length > 0) ? readResult[0].values[0][0] : 0
   const countResult = db.exec("SELECT COUNT(*) FROM messages WHERE user_id = ? AND sender = 'admin' AND id > ?", [req.user.id, lastRead])
