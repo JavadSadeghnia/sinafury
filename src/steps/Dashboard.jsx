@@ -558,6 +558,7 @@ function ProfilePage({ formData, goToStep, updateFormData, reloadProfile }) {
             cycles={allPackageCycles}
             activeIndex={packageTabIndex}
             onSelect={setPackageTabIndex}
+            pendingExtend={archivedCycles.length > 0 && !(formData.trainingProgram && formData.trainingProgram.some(row => row.weeks?.some(w => w.label || w.description)))}
           />
 
           <div className="flex items-center justify-between gap-4">

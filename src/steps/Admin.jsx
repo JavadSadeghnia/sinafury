@@ -8,7 +8,7 @@ import PlanTabs from '../components/PlanTabs'
 import {
   Users, User, Mail, Ruler, Weight, Target, Activity, Calendar,
   Package, ArrowLeft, X, Save, Plus, Trash2, LogOut, ChevronRight, ChevronLeft,
-  Clock, Dumbbell, Image, Heart,
+  Clock, Dumbbell, Image, Heart, Loader2,
 } from 'lucide-react'
 
 const goalLabels = {
@@ -353,6 +353,12 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
         const programEdited = (profile.edited_sections || []).includes('Program')
         const tabEdited = { info: infoEdited, photos: photosEdited, program: programEdited }
 
+        // User is extending: previous cycles exist AND no current training program is written yet,
+        // or extend_pending is still set on the server. Stays true until admin saves a new program.
+        const hasCurrentProgram = !!(profile.training_program && profile.training_program.length > 0 &&
+          profile.training_program.some(row => row.weeks?.some(w => w.label || w.description)))
+        const isExtending = !!profile.extend_pending || (archivedCycles.length > 0 && !hasCurrentProgram)
+
         return (
           <div className="flex gap-1 bg-dark-surface rounded-xl p-1 mb-6">
             {['info', 'photos', 'program', 'chat'].map((t) => (
@@ -366,16 +372,19 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
-                {tabEdited[t] && (
+                {t === 'program' && isExtending ? (
+                  <span className="absolute -top-1 -right-1 w-[18px] h-[18px] bg-blue-500 text-white rounded-full flex items-center justify-center">
+                    <Loader2 size={11} className="animate-spin" />
+                  </span>
+                ) : tabEdited[t] ? (
                   <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[8px] font-bold rounded-full flex items-center justify-center animate-beat">
                     ✎
                   </span>
-                )}
-                {!tabEdited[t] && tabPending[t] && (
+                ) : tabPending[t] ? (
                   <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-yellow-500 text-black text-[8px] font-bold rounded-full flex items-center justify-center px-0.5">
                     !
                   </span>
-                )}
+                ) : null}
               </button>
             ))}
           </div>
@@ -427,12 +436,15 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
             const defaultIdx = (currentIsFuture && allCycles.length > 1) ? lastIdx - 1 : lastIdx
             const safeIdx = countdownTabIndex < 0 ? defaultIdx : Math.min(countdownTabIndex, lastIdx)
             const active = allCycles[safeIdx]
+            const hasCurrentProgram = !!(profile.training_program && profile.training_program.length > 0 &&
+              profile.training_program.some(row => row.weeks?.some(w => w.label || w.description)))
+            const pendingExtend = !!profile.extend_pending || (archivedCycles.length > 0 && !hasCurrentProgram)
             return (
               <div className={`bg-dark-card border rounded-xl p-5 mt-4 relative ${active.isCurrent && (profile.edited_sections || []).includes('Package') ? 'border-red-500/40' : 'border-dark-border'}`}>
                 {active.isCurrent && (profile.edited_sections || []).includes('Package') && (
                   <span className="absolute -top-2 right-2 text-[9px] font-bold bg-red-500 text-white px-1.5 py-0.5 rounded-full">EDITED</span>
                 )}
-                <PlanTabs cycles={allCycles} activeIndex={safeIdx} onSelect={setCountdownTabIndex} />
+                <PlanTabs cycles={allCycles} activeIndex={safeIdx} onSelect={setCountdownTabIndex} pendingExtend={pendingExtend} />
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2">
@@ -525,10 +537,13 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
         const safeIdx = programTabIndex < 0 ? lastIdx : Math.min(programTabIndex, lastIdx)
         const active = allCycles[safeIdx]
         const isViewingCurrent = active?.isCurrent
+        const hasCurrentProgram = !!(profile.training_program && profile.training_program.length > 0 &&
+          profile.training_program.some(row => row.weeks?.some(w => w.label || w.description)))
+        const pendingExtend = !!profile.extend_pending || (archivedCycles.length > 0 && !hasCurrentProgram)
 
         return (
           <>
-            <PlanTabs cycles={allCycles} activeIndex={safeIdx} onSelect={setProgramTabIndex} />
+            <PlanTabs cycles={allCycles} activeIndex={safeIdx} onSelect={setProgramTabIndex} pendingExtend={pendingExtend} />
             {isViewingCurrent ? (
               <ProgramEditor
                 profile={profile}

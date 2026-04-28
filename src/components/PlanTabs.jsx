@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 
 const VISIBLE = 5
 
-export default function PlanTabs({ cycles, activeIndex, onSelect }) {
+export default function PlanTabs({ cycles, activeIndex, onSelect, pendingExtend = false }) {
   if (!cycles || cycles.length === 0) return null
 
   const total = cycles.length
@@ -48,18 +48,24 @@ export default function PlanTabs({ cycles, activeIndex, onSelect }) {
             : `Plan ${realIdx + 1}`
           const shortLabel = isCurrent ? (isFuture ? 'Next' : 'Now') : `${realIdx + 1}`
           const isActive = activeIndex === realIdx
+          const showSpinner = isCurrent && pendingExtend
           return (
             <button
               key={realIdx}
               onClick={() => onSelect(realIdx)}
-              title={label}
-              className={`min-w-0 px-2 py-2 text-xs sm:text-sm font-semibold transition-all cursor-pointer rounded-lg border ${
+              title={showSpinner ? `${label} — awaiting new program` : label}
+              className={`min-w-0 px-2 py-2 text-xs sm:text-sm font-semibold transition-all cursor-pointer rounded-lg border relative ${
                 isActive
                   ? 'flex-[2] bg-neon/10 border-neon text-neon shadow-[0_0_12px_rgba(212,255,0,0.15)]'
                   : 'flex-1 bg-dark-card border-dark-border text-gray-400 hover:text-white hover:border-gray-500'
               }`}
             >
               <span className="truncate block">{isActive ? label : shortLabel}</span>
+              {showSpinner && (
+                <span className="absolute -top-1 -right-1 w-[18px] h-[18px] bg-blue-500 text-white rounded-full flex items-center justify-center">
+                  <Loader2 size={11} className="animate-spin" />
+                </span>
+              )}
             </button>
           )
         })}
