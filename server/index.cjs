@@ -491,8 +491,15 @@ function adminAuth(req, res, next) {
 
 // List all users (summary)
 app.get('/api/admin/users', adminAuth, (req, res) => {
-  const result = db.exec('SELECT id, first_name, last_name, email, gender, goals, selected_package, onboarding_complete, viewed_by_admin, profile_edited, edited_sections, extend_pending, created_at FROM users ORDER BY created_at DESC')
+  const result = db.exec('SELECT id, first_name, last_name, email, gender, goals, selected_package, onboarding_complete, viewed_by_admin, profile_edited, edited_sections, extend_pending, program_start_date, program_duration_days, training_program, created_at FROM users ORDER BY created_at DESC')
   if (result.length === 0) return res.json({ users: [] })
+
+  // Pre-compute which users have archived program cycles, in one query.
+  const cycleRes = db.exec('SELECT user_id, COUNT(*) FROM program_cycles GROUP BY user_id')
+  const archivedCount = {}
+  if (cycleRes.length > 0) {
+    cycleRes[0].values.forEach(([uid, count]) => { archivedCount[uid] = count })
+  }
 
   const cols = result[0].columns
   const users = result[0].values.map(row => {
@@ -500,6 +507,16 @@ app.get('/api/admin/users', adminAuth, (req, res) => {
     cols.forEach((col, i) => { user[col] = row[i] })
     try { user.goals = JSON.parse(user.goals || '[]') } catch { user.goals = [] }
     try { user.edited_sections = JSON.parse(user.edited_sections || '[]') } catch { user.edited_sections = [] }
+    // awaiting_program: the user has previous cycles archived but the current training_program
+    // hasn't been written yet — i.e. they're mid-extend. Stays true until admin saves a new program.
+    let hasCurrentProgram = false
+    try {
+      const tp = JSON.parse(user.training_program || 'null')
+      hasCurrentProgram = Array.isArray(tp) && tp.some(r => r.weeks?.some(w => w.label || w.description))
+    } catch {}
+    user.has_current_program = hasCurrentProgram
+    user.awaiting_program = (archivedCount[user.id] || 0) > 0 && !hasCurrentProgram
+    delete user.training_program
     return user
   })
   res.json({ users })

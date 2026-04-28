@@ -100,15 +100,27 @@ function UserList({ users, onSelectUser, unreadMap = {} }) {
     <div className="space-y-3">
       {users.map((u) => {
         const unread = unreadMap[u.id] || 0
-        const isNew = !u.viewed_by_admin
         const isEdited = !!u.profile_edited
-        const isExtending = !!u.extend_pending
+        // EXTEND stays on as long as the user has archived cycles but no new program written yet,
+        // even after the admin has opened the user (which clears extend_pending).
+        const isExtending = !!u.extend_pending || !!u.awaiting_program
+        // NEW stays on until the admin actually sets up a program for the user, not just until
+        // they open the detail page. awaiting_program means they have a previous program — that's
+        // "extending", not "new", so suppress NEW in that case.
+        const isNew = !isExtending && (!u.viewed_by_admin || !u.has_current_program)
+        // Expired: program started and its duration has elapsed. Lower priority than EXTEND
+        // (a user who has already extended is awaiting a new program — don't also flag them as expired).
+        const isExpired = !isExtending && !!u.program_start_date && (() => {
+          const start = new Date(u.program_start_date.replace(' ', 'T') + 'Z')
+          const end = new Date(start.getTime() + (u.program_duration_days || 28) * MS_PER_DAY)
+          return new Date() >= end
+        })()
         return (
           <div
             key={u.id}
             onClick={() => onSelectUser(u.id)}
             className={`border border-dark-border rounded-xl p-4 flex items-center justify-between hover:border-neon/30 transition-colors cursor-pointer group ${
-              isExtending ? 'bg-blue-500/5' : isNew ? 'bg-neon/5' : isEdited ? 'bg-red-500/5' : 'bg-dark-card'
+              isExtending ? 'bg-blue-500/5' : isExpired ? 'bg-red-500/5' : isNew ? 'bg-neon/5' : isEdited ? 'bg-red-500/5' : 'bg-dark-card'
             }`}
           >
             <div className="flex items-center gap-4">
@@ -126,10 +138,13 @@ function UserList({ users, onSelectUser, unreadMap = {} }) {
                   {isExtending && (
                     <span className="text-[10px] font-bold bg-blue-500 text-white px-2 py-0.5 rounded-full animate-beat">EXTEND</span>
                   )}
-                  {isNew && !isExtending && (
+                  {!isExtending && isExpired && (
+                    <span className="text-[10px] font-bold bg-red-500 text-white px-2 py-0.5 rounded-full">EXPIRED</span>
+                  )}
+                  {isNew && !isExtending && !isExpired && (
                     <span className="text-[10px] font-bold bg-neon text-black px-2 py-0.5 rounded-full animate-beat">NEW</span>
                   )}
-                  {!isNew && !isExtending && isEdited && (
+                  {!isNew && !isExtending && !isExpired && isEdited && (
                     <span className="text-[10px] font-bold bg-red-500 text-white px-2 py-0.5 rounded-full animate-beat">EDITED</span>
                   )}
                 </div>
@@ -1060,7 +1075,28 @@ export default function Admin() {
   const [users, setUsers] = useState([])
   const [selectedUserId, setSelectedUserId] = useState(null)
   const [unreadMap, setUnreadMap] = useState({})
+  const [sortBy, setSortBy] = useState('default') // 'default' | 'new' | 'extended' | 'expired'
   const navigate = useNavigate()
+
+  // Surface users matching the selected status to the top; preserve the original order otherwise.
+  const sortedUsers = (() => {
+    if (sortBy === 'default') return users
+    const matches = (u) => {
+      if (sortBy === 'new') {
+        const ext = !!u.extend_pending || !!u.awaiting_program
+        return !ext && (!u.viewed_by_admin || !u.has_current_program)
+      }
+      if (sortBy === 'extended') return !!u.extend_pending || !!u.awaiting_program
+      if (sortBy === 'expired') {
+        if (u.extend_pending || u.awaiting_program || !u.program_start_date) return false
+        const start = new Date(u.program_start_date.replace(' ', 'T') + 'Z')
+        const end = new Date(start.getTime() + (u.program_duration_days || 28) * MS_PER_DAY)
+        return new Date() >= end
+      }
+      return false
+    }
+    return [...users].sort((a, b) => Number(matches(b)) - Number(matches(a)))
+  })()
 
   const loadUnread = () => {
     if (api.adminHasToken()) {
@@ -1154,7 +1190,21 @@ export default function Admin() {
           <div>
             <h2 className="text-2xl font-bold mb-2">Users</h2>
             <p className="text-gray-500 text-sm mb-6">Click on a user to view details and set their training program</p>
-            <UserList users={users} onSelectUser={(id) => {
+            <div className="flex items-center justify-end gap-2 mb-4">
+              <label htmlFor="user-sort" className="text-xs text-gray-500">Sort by</label>
+              <select
+                id="user-sort"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="bg-dark-card border border-dark-border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-neon cursor-pointer"
+              >
+                <option value="default">Default</option>
+                <option value="new">New</option>
+                <option value="extended">Extended</option>
+                <option value="expired">Expired</option>
+              </select>
+            </div>
+            <UserList users={sortedUsers} onSelectUser={(id) => {
               setSelectedUserId(id)
               api.adminMarkViewed(id).catch(() => {})
               setUsers(prev => prev.map(u => u.id === id ? { ...u, viewed_by_admin: 1 } : u))
