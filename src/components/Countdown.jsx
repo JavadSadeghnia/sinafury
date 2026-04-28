@@ -1,8 +1,14 @@
 import { useState, useEffect } from 'react'
 
-export default function Countdown({ startDate, durationDays = 28, size = 120 }) {
+// TEST MODE: 1 day = 10 seconds (set to 86400000 for real days)
+// Must match MS_PER_DAY in server/index.cjs.
+export const MS_PER_DAY = 5000
+
+export default function Countdown({ startDate, durationDays = 28, size = 120, wasExtended = false, previousPlanEnded = false }) {
   const [daysLeft, setDaysLeft] = useState(null)
   const [progress, setProgress] = useState(0)
+  const [isPending, setIsPending] = useState(false)
+  const [daysUntilStart, setDaysUntilStart] = useState(0)
 
   useEffect(() => {
     const calc = () => {
@@ -13,15 +19,30 @@ export default function Countdown({ startDate, durationDays = 28, size = 120 }) 
       }
       const start = new Date(startDate.replace(' ', 'T') + 'Z')
       const now = new Date()
-      const elapsedMs = now - start
-      const totalMs = durationDays * 24 * 60 * 60 * 1000
+
+      // If start date is in the future AND the previous plan hasn't ended yet → pending
+      if (start > now && !previousPlanEnded) {
+        setIsPending(true)
+        const untilMs = start - now
+        setDaysUntilStart(Math.ceil(untilMs / MS_PER_DAY))
+        setDaysLeft(durationDays)
+        setProgress(0)
+        return
+      }
+
+      // If previous plan ended but this plan was scheduled for later → start it from now instead
+      const effectiveStart = (start > now && previousPlanEnded) ? now : start
+
+      setIsPending(false)
+      const elapsedMs = now - effectiveStart
+      const totalMs = durationDays * MS_PER_DAY
       const remainingMs = Math.max(0, totalMs - elapsedMs)
-      const days = Math.ceil(remainingMs / (24 * 60 * 60 * 1000))
+      const days = Math.ceil(remainingMs / MS_PER_DAY)
       setDaysLeft(days)
       setProgress(Math.min(1, Math.max(0, elapsedMs / totalMs)))
     }
     calc()
-    const interval = setInterval(calc, 60000)
+    const interval = setInterval(calc, 1000)
     return () => clearInterval(interval)
   }, [startDate, durationDays])
 
@@ -32,7 +53,30 @@ export default function Countdown({ startDate, durationDays = 28, size = 120 }) 
   const circumference = 2 * Math.PI * radius
   const offset = circumference * (1 - progress)
 
-  const isComplete = daysLeft === 0
+  const isComplete = !isPending && daysLeft === 0
+  // For completed plans that were extended → "Completed" in neon; otherwise → "Expired" in red
+  const completedAndExtended = isComplete && wasExtended
+  const stroke = isPending
+    ? '#3b82f6'
+    : isComplete
+      ? (completedAndExtended ? '#d4ff00' : '#ef4444')
+      : '#d4ff00'
+  const numberColor = isPending
+    ? 'text-blue-400'
+    : isComplete
+      ? (completedAndExtended ? 'text-neon' : 'text-red-500')
+      : 'text-neon'
+  const labelColor = isPending
+    ? 'text-blue-400'
+    : isComplete
+      ? (completedAndExtended ? 'text-neon' : 'text-red-500')
+      : 'text-gray-400'
+  const numberValue = isPending ? daysUntilStart : (isComplete ? '0' : daysLeft)
+  const labelText = isPending
+    ? (daysUntilStart === 1 ? 'Day to Start' : 'Days to Start')
+    : isComplete
+      ? (completedAndExtended ? 'Completed!' : 'Expired')
+      : (daysLeft === 1 ? 'Day Left' : 'Days Left')
 
   return (
     <div className="flex flex-col items-center">
@@ -52,26 +96,22 @@ export default function Countdown({ startDate, durationDays = 28, size = 120 }) 
             cx={size / 2}
             cy={size / 2}
             r={radius}
-            stroke={isComplete ? '#ef4444' : '#d4ff00'}
+            stroke={stroke}
             strokeWidth={strokeWidth}
             fill="none"
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
-            style={{
-              transition: 'stroke-dashoffset 1s ease',
-              filter: 'drop-shadow(0 0 6px currentColor)',
-            }}
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className={`font-bold ${isComplete ? 'text-red-500' : 'text-neon'}`} style={{ fontSize: size * 0.32 }}>
-            {isComplete ? 'END' : daysLeft}
+          <span className={`font-bold ${numberColor}`} style={{ fontSize: size * 0.32 }}>
+            {numberValue}
           </span>
         </div>
       </div>
-      <span className={`text-xs uppercase tracking-widest mt-2 font-semibold whitespace-nowrap ${isComplete ? 'text-red-500' : 'text-gray-400'}`}>
-        {isComplete ? 'Expired' : (daysLeft === 1 ? 'Day Left' : 'Days Left')}
+      <span className={`text-xs uppercase tracking-widest mt-2 font-semibold whitespace-nowrap ${labelColor}`}>
+        {labelText}
       </span>
     </div>
   )

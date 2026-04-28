@@ -8,7 +8,7 @@ const EMOJI_LIST = [
   '🍎', '🥗', '🥩', '🥚', '💧', '☕', '🍌', '🥑', '🍗', '🥛',
 ]
 
-const SERVER_URL = 'http://localhost:3004'
+const SERVER_URL = 'http://localhost:3005'
 
 function parseMessage(text) {
   const imageMatch = text.match(/^\[image:(\/uploads\/[^\]]+)\]$/)
@@ -98,7 +98,7 @@ export default function Chat({ messages, onSend, onSendImage, isAdmin = false, p
               <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
                 isMe
                   ? 'bg-neon text-black rounded-br-md'
-                  : 'bg-dark-card border border-dark-border text-white rounded-bl-md'
+                  : 'bg-[#262626] border border-gray-700/40 text-white rounded-bl-md shadow-md'
               }`}>
                 {parsed.type === 'image' ? (
                   <img

@@ -8,9 +8,12 @@ const jwt = require('jsonwebtoken')
 const multer = require('multer')
 
 const app = express()
-const PORT = 3004
+const PORT = 3005
 const JWT_SECRET = 'sinafury_secret_key_change_in_production_2024'
 const DB_PATH = path.join(__dirname, 'sinafury.db')
+
+// TEST MODE: 1 day = 10 seconds (set to 86400000 for real days)
+const MS_PER_DAY = 5000
 
 let db
 
@@ -132,6 +135,30 @@ async function initDB() {
   try { db.exec("SELECT reminder_7day_sent FROM users LIMIT 1") }
   catch { db.run("ALTER TABLE users ADD COLUMN reminder_7day_sent INTEGER DEFAULT 0") }
 
+  try { db.exec("SELECT extend_pending FROM users LIMIT 1") }
+  catch { db.run("ALTER TABLE users ADD COLUMN extend_pending INTEGER DEFAULT 0") }
+
+  try { db.exec("SELECT pending_start_date FROM users LIMIT 1") }
+  catch { db.run("ALTER TABLE users ADD COLUMN pending_start_date TEXT") }
+
+  // Program cycles archive — saves history of past programs
+  db.run(`
+    CREATE TABLE IF NOT EXISTS program_cycles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      cycle_number INTEGER NOT NULL,
+      training_program TEXT,
+      training_days TEXT,
+      selected_package TEXT,
+      payment_proof_path TEXT,
+      program_start_date TEXT,
+      program_duration_days INTEGER,
+      completed_days TEXT,
+      archived_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `)
+
   // Fix old default training_days for users who never changed it
   db.run("UPDATE users SET training_days = '[]' WHERE training_days = '[\"Mon\",\"Wed\",\"Fri\"]'")
 
@@ -241,17 +268,46 @@ app.get('/api/auth/me', authenticate, (req, res) => {
 // ============ PROFILE ROUTES ============
 
 // Get profile
+// Helper: if a user's current plan was scheduled in the future, but the previous plan has ended,
+// roll the new plan's start_date forward to now (so its countdown is accurate everywhere)
+function rebaseFutureStartIfPreviousEnded(userId, profile) {
+  if (!profile.program_start_date) return profile
+  const start = new Date(profile.program_start_date.replace(' ', 'T') + 'Z')
+  const now = new Date()
+  if (start <= now) return profile // Already started, nothing to do
+
+  // Check the most recent archived cycle to see if it ended
+  const archRes = db.exec(
+    'SELECT program_start_date, program_duration_days FROM program_cycles WHERE user_id = ? ORDER BY cycle_number DESC LIMIT 1',
+    [userId]
+  )
+  if (archRes.length === 0 || archRes[0].values.length === 0) return profile
+  const [prevStart, prevDur] = archRes[0].values[0]
+  if (!prevStart) return profile
+  const pStart = new Date(prevStart.replace(' ', 'T') + 'Z')
+  const pEnd = new Date(pStart.getTime() + (prevDur || 28) * MS_PER_DAY)
+  if (pEnd > now) return profile // previous still active
+
+  // Previous plan ended. Roll the future plan's start to "now"
+  const nowSql = now.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+  db.run("UPDATE users SET program_start_date = ? WHERE id = ?", [nowSql, userId])
+  saveDB()
+  profile.program_start_date = nowSql
+  return profile
+}
+
 // Helper: send 7-day reminder message if countdown <= 7 days and not already sent
 function checkAndSendReminder(userId, profile) {
   if (!profile.program_start_date || profile.reminder_7day_sent) return
   const start = new Date(profile.program_start_date.replace(' ', 'T') + 'Z')
   const now = new Date()
+  // If plan hasn't started yet (future scheduled), skip
+  if (start > now) return
   const elapsedMs = now - start
   const durationDays = profile.program_duration_days || 28
-  // TEST MODE: 1 day = 1 second
-  const totalMs = durationDays * 1000
+  const totalMs = durationDays * MS_PER_DAY
   const remainingMs = Math.max(0, totalMs - elapsedMs)
-  const daysLeft = Math.ceil(remainingMs / 1000)
+  const daysLeft = Math.ceil(remainingMs / MS_PER_DAY)
 
   if (daysLeft <= 7 && daysLeft > 0) {
     const message = `Hi! Just a quick reminder — you've been training for 3 weeks, and you have 1 week left in your current program.\n\nIf you'd like to keep your schedule consistent without any gaps, you can extend your program now and secure your next 4 weeks in advance.`
@@ -271,6 +327,9 @@ app.get('/api/profile', authenticate, (req, res) => {
   const row = result[0].values[0]
   const profile = {}
   cols.forEach((col, i) => { profile[col] = row[i] })
+
+  // If a future-scheduled plan's previous cycle has now ended, rebase its start to now
+  rebaseFutureStartIfPreviousEnded(req.user.id, profile)
 
   // Check and send 7-day reminder if needed
   checkAndSendReminder(req.user.id, profile)
@@ -432,7 +491,7 @@ function adminAuth(req, res, next) {
 
 // List all users (summary)
 app.get('/api/admin/users', adminAuth, (req, res) => {
-  const result = db.exec('SELECT id, first_name, last_name, email, gender, goals, selected_package, onboarding_complete, viewed_by_admin, profile_edited, edited_sections, created_at FROM users ORDER BY created_at DESC')
+  const result = db.exec('SELECT id, first_name, last_name, email, gender, goals, selected_package, onboarding_complete, viewed_by_admin, profile_edited, edited_sections, extend_pending, created_at FROM users ORDER BY created_at DESC')
   if (result.length === 0) return res.json({ users: [] })
 
   const cols = result[0].columns
@@ -489,7 +548,7 @@ app.delete('/api/admin/users/:id', adminAuth, (req, res) => {
 
 // Mark user as viewed by admin
 app.post('/api/admin/users/:id/viewed', adminAuth, (req, res) => {
-  db.run("UPDATE users SET viewed_by_admin = 1 WHERE id = ?", [req.params.id])
+  db.run("UPDATE users SET viewed_by_admin = 1, extend_pending = 0 WHERE id = ?", [req.params.id])
   saveDB()
   res.json({ success: true })
 })
@@ -569,13 +628,127 @@ app.put('/api/admin/users/:id/program', adminAuth, (req, res) => {
   res.json({ success: true })
 })
 
+// Reset for program extension — archives current cycle, then clears for new one
+app.post('/api/profile/reset-payment', authenticate, (req, res) => {
+  try {
+    // Read full current state
+    const cur = db.exec(`SELECT
+      training_program, training_days, selected_package, payment_proof_path,
+      program_start_date, program_duration_days, completed_days
+      FROM users WHERE id = ?`, [req.user.id])
+
+    let pendingStartDate = null
+    if (cur.length > 0 && cur[0].values.length > 0) {
+      const [tp, td, sp, pp, psd, pdd, cd] = cur[0].values[0]
+      // Only archive if user actually had a real plan (program existed)
+      if (tp && tp !== 'null') {
+        // Find next cycle_number
+        const cnRes = db.exec("SELECT COALESCE(MAX(cycle_number), 0) + 1 FROM program_cycles WHERE user_id = ?", [req.user.id])
+        const nextCycle = (cnRes.length > 0 && cnRes[0].values.length > 0) ? cnRes[0].values[0][0] : 1
+        db.run(`INSERT INTO program_cycles
+          (user_id, cycle_number, training_program, training_days, selected_package,
+           payment_proof_path, program_start_date, program_duration_days, completed_days)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [req.user.id, nextCycle, tp, td, sp, pp, psd, pdd, cd])
+
+        // Calculate when the old plan ends — that's when the new plan should start
+        if (psd) {
+          const oldStart = new Date(psd.replace(' ', 'T') + 'Z')
+          const oldEnd = new Date(oldStart.getTime() + (pdd || 28) * MS_PER_DAY)
+          const now = new Date()
+          if (oldEnd > now) {
+            pendingStartDate = oldEnd.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+          }
+        }
+      }
+    }
+
+    // Note: don't delete the photo file — it's preserved in the archive
+    db.run(`UPDATE users SET
+      payment_proof_path = NULL,
+      selected_package = NULL,
+      training_days = '[]',
+      training_program = NULL,
+      completed_days = '{}',
+      program_start_date = NULL,
+      pending_start_date = ?,
+      reminder_7day_sent = 0,
+      extend_pending = 1,
+      updated_at = datetime('now')
+      WHERE id = ?`, [pendingStartDate, req.user.id])
+    saveDB()
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Get all program cycles for a user (current + archives)
+app.get('/api/profile/cycles', authenticate, (req, res) => {
+  try {
+    const result = db.exec(
+      'SELECT cycle_number, training_program, training_days, selected_package, payment_proof_path, program_start_date, program_duration_days, completed_days, archived_at FROM program_cycles WHERE user_id = ? ORDER BY cycle_number ASC',
+      [req.user.id]
+    )
+    const cycles = []
+    if (result.length > 0) {
+      result[0].values.forEach(row => {
+        cycles.push({
+          cycle_number: row[0],
+          training_program: row[1] ? JSON.parse(row[1]) : null,
+          training_days: row[2] ? JSON.parse(row[2]) : [],
+          selected_package: row[3],
+          payment_proof_path: row[4],
+          program_start_date: row[5],
+          program_duration_days: row[6],
+          completed_days: row[7] ? JSON.parse(row[7]) : {},
+          archived_at: row[8],
+        })
+      })
+    }
+    res.json({ cycles })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Admin: get cycles for a user
+app.get('/api/admin/users/:id/cycles', adminAuth, (req, res) => {
+  try {
+    const result = db.exec(
+      'SELECT cycle_number, training_program, training_days, selected_package, payment_proof_path, program_start_date, program_duration_days, completed_days, archived_at FROM program_cycles WHERE user_id = ? ORDER BY cycle_number ASC',
+      [req.params.id]
+    )
+    const cycles = []
+    if (result.length > 0) {
+      result[0].values.forEach(row => {
+        cycles.push({
+          cycle_number: row[0],
+          training_program: row[1] ? JSON.parse(row[1]) : null,
+          training_days: row[2] ? JSON.parse(row[2]) : [],
+          selected_package: row[3],
+          payment_proof_path: row[4],
+          program_start_date: row[5],
+          program_duration_days: row[6],
+          completed_days: row[7] ? JSON.parse(row[7]) : {},
+          archived_at: row[8],
+        })
+      })
+    }
+    res.json({ cycles })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // User starts their countdown by first viewing the Training Plan
 app.post('/api/profile/start-countdown', authenticate, (req, res) => {
   try {
-    const result = db.exec('SELECT program_start_date, training_program FROM users WHERE id = ?', [req.user.id])
+    const result = db.exec('SELECT program_start_date, training_program, pending_start_date FROM users WHERE id = ?', [req.user.id])
     if (result.length === 0 || result[0].values.length === 0) return res.status(404).json({ error: 'Not found' })
     const currentStart = result[0].values[0][0]
     const program = result[0].values[0][1]
+    const pendingStart = result[0].values[0][2]
     if (currentStart) return res.json({ success: true, alreadyStarted: true })
 
     // Only start if there's a real program with content
@@ -586,7 +759,18 @@ app.post('/api/profile/start-countdown', authenticate, (req, res) => {
     } catch {}
     if (!hasContent) return res.json({ success: true, alreadyStarted: false })
 
-    db.run("UPDATE users SET program_start_date = datetime('now') WHERE id = ?", [req.user.id])
+    // If a pending_start_date exists (extend scenario) and it's in the future, schedule the start there
+    let startDateClause = "datetime('now')"
+    let params = [req.user.id]
+    if (pendingStart) {
+      const pStart = new Date(pendingStart.replace(' ', 'T') + 'Z')
+      if (pStart > new Date()) {
+        startDateClause = "?"
+        params = [pendingStart, req.user.id]
+      }
+    }
+
+    db.run(`UPDATE users SET program_start_date = ${startDateClause}, pending_start_date = NULL WHERE id = ?`, params)
     saveDB()
     res.json({ success: true, started: true })
   } catch (err) {
@@ -611,6 +795,19 @@ app.put('/api/profile/completed', authenticate, (req, res) => {
   db.run(
     "UPDATE users SET completed_days = ?, updated_at = datetime('now') WHERE id = ?",
     [JSON.stringify(completedDays), req.user.id]
+  )
+  saveDB()
+  res.json({ success: true })
+})
+
+// Update completed days for an archived cycle
+app.put('/api/profile/cycles/:cycleNumber/completed', authenticate, (req, res) => {
+  const { completedDays } = req.body
+  const cycleNumber = parseInt(req.params.cycleNumber, 10)
+  if (isNaN(cycleNumber)) return res.status(400).json({ error: 'Invalid cycle number' })
+  db.run(
+    "UPDATE program_cycles SET completed_days = ? WHERE user_id = ? AND cycle_number = ?",
+    [JSON.stringify(completedDays), req.user.id, cycleNumber]
   )
   saveDB()
   res.json({ success: true })
@@ -717,7 +914,7 @@ app.post('/api/chat/image', authenticate, chatUpload.single('file'), (req, res) 
 
 // Get unread count (user - messages from admin they haven't read)
 app.get('/api/chat/unread', authenticate, (req, res) => {
-  // Check countdown reminder on every poll
+  // Check countdown reminder + rebase future starts on every poll
   try {
     const profResult = db.exec('SELECT program_start_date, program_duration_days, reminder_7day_sent FROM users WHERE id = ?', [req.user.id])
     if (profResult.length > 0 && profResult[0].values.length > 0) {
@@ -725,6 +922,7 @@ app.get('/api/chat/unread', authenticate, (req, res) => {
       const row = profResult[0].values[0]
       const profile = {}
       cols.forEach((col, i) => { profile[col] = row[i] })
+      rebaseFutureStartIfPreviousEnded(req.user.id, profile)
       checkAndSendReminder(req.user.id, profile)
     }
   } catch {}

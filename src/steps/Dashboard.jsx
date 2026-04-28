@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import BodyMap from '../components/BodyMap'
 import Chat from '../components/Chat'
-import Countdown from '../components/Countdown'
+import Countdown, { MS_PER_DAY } from '../components/Countdown'
+import PlanTabs from '../components/PlanTabs'
 import {
   Target,
   Dumbbell,
@@ -154,18 +155,37 @@ function DetailModal({ title, description: customDesc, cellKey, isDone, onToggle
   )
 }
 
-function TrainingPage({ formData, goToStep }) {
+function TrainingPage({ formData, goToStep, reloadProfile }) {
   const { user } = useAuth()
   const hasCustomProgram = formData.trainingProgram &&
     formData.trainingProgram.some(row => row.weeks?.some(w => w.label || w.description))
-  const schedule = hasCustomProgram ? formData.trainingProgram : buildSchedule(formData.trainingDays)
   const [modalInfo, setModalInfo] = useState(null)
   const [completedDays, setCompletedDays] = useState({})
+  const [archivedCycles, setArchivedCycles] = useState([])
+  const [activeTab, setActiveTab] = useState(0) // index into combined cycles list
+
+  // Build combined list: archives first, then current
+  const currentPlan = hasCustomProgram ? {
+    cycle_number: 'current',
+    training_program: formData.trainingProgram,
+    completed_days: completedDays,
+    isCurrent: true,
+  } : null
+  const allCycles = [...archivedCycles, ...(currentPlan ? [currentPlan] : [])]
+
+  // Default to current (last index)
+  useEffect(() => {
+    setActiveTab(allCycles.length > 0 ? allCycles.length - 1 : 0)
+  }, [archivedCycles.length, hasCustomProgram])
+
 
   useEffect(() => {
     if (user?.id) {
       api.getCompletedDays()
         .then((data) => setCompletedDays(data.completedDays || {}))
+        .catch(() => {})
+      api.getCycles()
+        .then((data) => setArchivedCycles(data.cycles || []))
         .catch(() => {})
     }
   }, [user?.id])
@@ -173,16 +193,28 @@ function TrainingPage({ formData, goToStep }) {
   // Start the countdown when user first views a real training plan
   useEffect(() => {
     if (hasCustomProgram && !formData.programStartDate) {
-      api.startCountdown().catch(() => {})
+      api.startCountdown()
+        .then(() => { if (reloadProfile) reloadProfile() })
+        .catch(() => {})
     }
-  }, [hasCustomProgram, formData.programStartDate])
+  }, [hasCustomProgram, formData.programStartDate, reloadProfile])
 
-  const toggleDone = (cellKey) => {
-    setCompletedDays(prev => {
-      const updated = { ...prev, [cellKey]: !prev[cellKey] }
-      api.updateCompletedDays(updated).catch(() => {})
-      return updated
-    })
+  const toggleDone = (cellKey, viewingCycle) => {
+    if (viewingCycle?.isCurrent) {
+      setCompletedDays(prev => {
+        const updated = { ...prev, [cellKey]: !prev[cellKey] }
+        api.updateCompletedDays(updated).catch(() => {})
+        return updated
+      })
+    } else if (viewingCycle?.cycle_number) {
+      // Archived cycle — update its completed_days locally and on server
+      setArchivedCycles(prev => prev.map(c => {
+        if (c.cycle_number !== viewingCycle.cycle_number) return c
+        const updated = { ...(c.completed_days || {}), [cellKey]: !c.completed_days?.[cellKey] }
+        api.updateCycleCompletedDays(c.cycle_number, updated).catch(() => {})
+        return { ...c, completed_days: updated }
+      }))
+    }
   }
 
   const isProfileIncomplete = !formData.height || !formData.weight || !formData.goals?.length || !formData.selectedPackage || !formData.paymentProof
@@ -211,7 +243,8 @@ function TrainingPage({ formData, goToStep }) {
     )
   }
 
-  if (!hasCustomProgram) {
+  // If there's no current program AND no archives, show the prep message
+  if (!hasCustomProgram && archivedCycles.length === 0) {
     return (
       <div className="px-4 sm:px-8 py-6 sm:py-10 max-w-5xl mx-auto">
         <h2 className="text-2xl sm:text-3xl font-bold mb-6">Training Plan</h2>
@@ -232,12 +265,49 @@ function TrainingPage({ formData, goToStep }) {
     )
   }
 
+  // Build cycles array — when current is empty (extended, waiting for admin), still show a "Current Plan" placeholder tab
+  const placeholderCurrent = !hasCustomProgram ? {
+    cycle_number: 'current',
+    training_program: null,
+    completed_days: {},
+    isCurrent: true,
+    isPlaceholder: true,
+  } : null
+  const cyclesWithPlaceholder = placeholderCurrent ? [...archivedCycles, placeholderCurrent] : allCycles
+  const safeActiveTab = Math.min(activeTab, cyclesWithPlaceholder.length - 1)
+  const activeCycleForRender = cyclesWithPlaceholder[safeActiveTab]
+  const isViewingPlaceholder = activeCycleForRender?.isPlaceholder
+  const isViewingCurrent = activeCycleForRender?.isCurrent
+  const schedule = activeCycleForRender?.training_program || []
+  const viewedCompletedDays = isViewingCurrent ? completedDays : (activeCycleForRender?.completed_days || {})
+
   return (
     <div className="px-4 sm:px-8 py-6 sm:py-10 max-w-5xl mx-auto">
       <h2 className="text-2xl sm:text-3xl font-bold mb-2">Training Plan</h2>
       <p className="text-gray-500 mb-6">Your personalized {NUM_WEEKS}-week schedule</p>
 
-      {/* Table */}
+      <PlanTabs
+        cycles={cyclesWithPlaceholder}
+        activeIndex={safeActiveTab}
+        onSelect={setActiveTab}
+      />
+
+      {isViewingPlaceholder ? (
+        <div className="flex flex-col items-center justify-center py-12">
+          <div className="w-16 h-16 rounded-full bg-neon/10 flex items-center justify-center mb-4">
+            <Dumbbell size={28} className="text-neon" />
+          </div>
+          <h3 className="text-lg sm:text-xl font-bold text-center mb-2">Your New Program is Being Prepared</h3>
+          <p className="text-gray-400 text-center max-w-md leading-relaxed text-sm">
+            Your trainer is creating your next personalized training program. You can still view your previous plan(s) using the tabs above.
+          </p>
+          <div className="flex items-center gap-2 mt-4 text-neon/70 text-sm">
+            <div className="w-2 h-2 rounded-full bg-neon animate-pulse" />
+            <span>In progress</span>
+          </div>
+        </div>
+      ) : (
+      /* Table */
       <div className="rounded-2xl border border-dark-border overflow-hidden">
         <table className="w-full border-collapse table-fixed">
           <thead>
@@ -260,7 +330,7 @@ function TrainingPage({ formData, goToStep }) {
           <tbody>
             {schedule.map((row, rowIdx) => (
               <tr
-                key={row.day}
+                key={`${activeTab}-${row.day}`}
                 className={rowIdx % 2 === 0 ? 'bg-dark-card' : 'bg-dark-surface'}
               >
                 <td className="px-1 py-3 border-r border-dark-border text-center w-[52px] sm:w-[60px]">
@@ -269,11 +339,11 @@ function TrainingPage({ formData, goToStep }) {
 
                 {row.weeks.map((cell, wi) => {
                   const cellKey = `${rowIdx}-${wi}`
-                  const done = completedDays[cellKey]
+                  const done = viewedCompletedDays[cellKey]
                   return (
                     <td
-                      key={wi}
-                      className={`px-2 py-3 border-r border-dark-border last:border-r-0 text-center align-middle transition-colors ${
+                      key={`${activeTab}-${wi}`}
+                      className={`px-2 py-3 border-r border-dark-border last:border-r-0 text-center align-middle ${
                         done ? 'bg-green-500/15' : ''
                       }`}
                     >
@@ -302,6 +372,7 @@ function TrainingPage({ formData, goToStep }) {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Modal */}
       {modalInfo && (
@@ -309,8 +380,8 @@ function TrainingPage({ formData, goToStep }) {
           title={modalInfo.label}
           description={modalInfo.description}
           cellKey={modalInfo.cellKey}
-          isDone={!!completedDays[modalInfo.cellKey]}
-          onToggleDone={toggleDone}
+          isDone={!!viewedCompletedDays[modalInfo.cellKey]}
+          onToggleDone={!isViewingPlaceholder ? (cellKey) => toggleDone(cellKey, activeCycleForRender) : null}
           onClose={() => setModalInfo(null)}
         />
       )}
@@ -349,7 +420,71 @@ function PendingSections({ sections, goToStep }) {
   )
 }
 
-function ProfilePage({ formData, goToStep }) {
+function ProfilePage({ formData, goToStep, updateFormData, reloadProfile }) {
+  const [archivedCycles, setArchivedCycles] = useState([])
+  const [packageTabIndex, setPackageTabIndex] = useState(0)
+  const [, setTick] = useState(0)
+
+  useEffect(() => {
+    api.getCycles().then((d) => setArchivedCycles(d.cycles || [])).catch(() => {})
+  }, [formData.programStartDate])
+
+  // Re-evaluate "is future" every second so the tab label flips to "Current Plan" when the previous plan ends.
+  // Also reload the profile + cycles so the server-side rebase of program_start_date (when the previous plan ends)
+  // and the 7-day reminder are reflected in the UI without needing a manual refresh.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick(t => t + 1)
+      if (reloadProfile) reloadProfile()
+      api.getCycles().then((d) => setArchivedCycles(d.cycles || [])).catch(() => {})
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [reloadProfile])
+
+  // Check if previous plan has ended
+  const lastArchived = archivedCycles[archivedCycles.length - 1]
+  const previousPlanEnded = (() => {
+    if (!lastArchived?.program_start_date) return true
+    const prevStart = new Date(lastArchived.program_start_date.replace(' ', 'T') + 'Z')
+    const prevEnd = new Date(prevStart.getTime() + (lastArchived.program_duration_days || 28) * MS_PER_DAY)
+    return new Date() >= prevEnd
+  })()
+
+  // Current plan is "future" only if it's scheduled in the future AND the previous plan hasn't ended
+  const currentPlanIsFuture = formData.programStartDate
+    ? new Date(formData.programStartDate.replace(' ', 'T') + 'Z') > new Date() && !previousPlanEnded
+    : false
+
+  const currentPlan = (formData.selectedPackage || formData.programStartDate) ? {
+    cycle_number: 'current',
+    selected_package: formData.selectedPackage,
+    program_start_date: formData.programStartDate,
+    program_duration_days: formData.programDurationDays || 28,
+    isCurrent: true,
+    isFuture: currentPlanIsFuture,
+  } : null
+
+  // Mark archived cycles whose user replaced them with a new plan as "wasExtended"
+  const archivedWithExtended = archivedCycles.map((c, i, arr) => ({
+    ...c,
+    wasExtended: i < arr.length - 1 || !!currentPlan,
+  }))
+
+  const allPackageCycles = [...archivedWithExtended, ...(currentPlan ? [currentPlan] : [])]
+
+  // Default tab: if current plan is in the future and there's a previous plan, point to previous; otherwise current
+  useEffect(() => {
+    if (allPackageCycles.length === 0) return
+    const lastIdx = allPackageCycles.length - 1
+    if (currentPlanIsFuture && allPackageCycles.length > 1) {
+      setPackageTabIndex(lastIdx - 1)
+    } else {
+      setPackageTabIndex(lastIdx)
+    }
+  }, [archivedCycles.length, !!currentPlan, currentPlanIsFuture])
+
+  const activePackage = allPackageCycles[packageTabIndex] || null
+  const isViewingCurrentPackage = activePackage?.isCurrent
   const schedule = formData.trainingDays
   const pendingSections = getPendingSections(formData)
 
@@ -415,24 +550,76 @@ function ProfilePage({ formData, goToStep }) {
 
         <div className="bg-dark-card border border-dark-border rounded-xl p-5 sm:p-6">
           <div className="flex items-center gap-3 mb-3">
-            <Package size={0} className="text-neon" />
+            <Package size={20} className="text-neon" />
             <h3 className="font-bold text-lg">Your Package</h3>
           </div>
+
+          <PlanTabs
+            cycles={allPackageCycles}
+            activeIndex={packageTabIndex}
+            onSelect={setPackageTabIndex}
+          />
+
           <div className="flex items-center justify-between gap-4">
             <div className="flex-1">
-              {formData.selectedPackage ? (
-                <p className="text-lg sm:text-xl text-gray-300">{packageLabels[formData.selectedPackage]}</p>
+              {activePackage?.selected_package ? (
+                <p className="text-lg sm:text-xl text-gray-300">{packageLabels[activePackage.selected_package]}</p>
               ) : (
                 <span className="text-xs px-2.5 py-1 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/30">Pending</span>
               )}
+              {isViewingCurrentPackage && (() => {
+                if (!formData.programStartDate) return null
+                const start = new Date(formData.programStartDate.replace(' ', 'T') + 'Z')
+                const now = new Date()
+                if (start > now) return null // pending future start — old plan still active
+                const elapsedMs = now - start
+                const totalMs = (formData.programDurationDays || 28) * MS_PER_DAY
+                const daysLeft = Math.ceil(Math.max(0, totalMs - elapsedMs) / MS_PER_DAY)
+                if (daysLeft > 7) return null
+                return (
+                  <button
+                    onClick={async () => {
+                      try { await api.resetPayment() } catch {}
+                      if (updateFormData) updateFormData({
+                        paymentProof: null,
+                        selectedPackage: null,
+                        trainingDays: [],
+                        trainingDaysCount: 0,
+                        trainingProgram: null,
+                        programStartDate: null,
+                        programDurationDays: 28,
+                      })
+                      goToStep(7)
+                    }}
+                    className="mt-3 flex items-center gap-2 px-4 py-2 bg-neon/15 border border-neon/50 rounded-xl text-sm text-neon hover:bg-neon/25 transition-colors cursor-pointer animate-pulse"
+                  >
+                    <Package size={14} />
+                    Extend Program
+                  </button>
+                )
+              })()}
             </div>
-            {formData.programStartDate && (
-              <Countdown
-                startDate={formData.programStartDate}
-                durationDays={formData.programDurationDays || 28}
-                size={60}
-              />
-            )}
+            {activePackage?.program_start_date && (() => {
+              // For the current plan with a future start date, check if the previous plan has ended
+              let previousPlanEnded = false
+              if (activePackage.isCurrent && archivedCycles.length > 0) {
+                const prev = archivedCycles[archivedCycles.length - 1]
+                if (prev?.program_start_date) {
+                  const prevStart = new Date(prev.program_start_date.replace(' ', 'T') + 'Z')
+                  const prevEnd = new Date(prevStart.getTime() + (prev.program_duration_days || 28) * MS_PER_DAY)
+                  previousPlanEnded = new Date() >= prevEnd
+                }
+              }
+              return (
+                <Countdown
+                  startDate={activePackage.program_start_date}
+                  durationDays={activePackage.program_duration_days || 28}
+                  size={60}
+                  wasExtended={!!activePackage.wasExtended}
+                  previousPlanEnded={previousPlanEnded}
+                />
+              )
+            })()}
           </div>
         </div>
 
@@ -602,7 +789,7 @@ function ChatPage() {
   )
 }
 
-export default function Dashboard({ formData, goToStep, reloadProfile }) {
+export default function Dashboard({ formData, goToStep, reloadProfile, updateFormData }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { signOut } = useAuth()
@@ -738,8 +925,8 @@ export default function Dashboard({ formData, goToStep, reloadProfile }) {
         </div>
       </div>
 
-      {activeTab === 'training' && <TrainingPage formData={formData} goToStep={goToStep} />}
-      {activeTab === 'profile' && <ProfilePage formData={formData} goToStep={goToStep} />}
+      {activeTab === 'training' && <TrainingPage formData={formData} goToStep={goToStep} reloadProfile={reloadProfile} />}
+      {activeTab === 'profile' && <ProfilePage formData={formData} goToStep={goToStep} updateFormData={updateFormData} reloadProfile={reloadProfile} />}
       {activeTab === 'chat' && <ChatPage />}
 
       <div className="fixed bottom-0 left-0 right-0 bg-dark-card border-t border-dark-border">

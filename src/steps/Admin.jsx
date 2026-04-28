@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import BodyMap from '../components/BodyMap'
 import Chat from '../components/Chat'
-import Countdown from '../components/Countdown'
+import Countdown, { MS_PER_DAY } from '../components/Countdown'
+import PlanTabs from '../components/PlanTabs'
 import {
   Users, User, Mail, Ruler, Weight, Target, Activity, Calendar,
   Package, ArrowLeft, X, Save, Plus, Trash2, LogOut, ChevronRight, ChevronLeft,
@@ -101,12 +102,13 @@ function UserList({ users, onSelectUser, unreadMap = {} }) {
         const unread = unreadMap[u.id] || 0
         const isNew = !u.viewed_by_admin
         const isEdited = !!u.profile_edited
+        const isExtending = !!u.extend_pending
         return (
           <div
             key={u.id}
             onClick={() => onSelectUser(u.id)}
             className={`border border-dark-border rounded-xl p-4 flex items-center justify-between hover:border-neon/30 transition-colors cursor-pointer group ${
-              isNew ? 'bg-neon/5' : isEdited ? 'bg-red-500/5' : 'bg-dark-card'
+              isExtending ? 'bg-blue-500/5' : isNew ? 'bg-neon/5' : isEdited ? 'bg-red-500/5' : 'bg-dark-card'
             }`}
           >
             <div className="flex items-center gap-4">
@@ -119,12 +121,15 @@ function UserList({ users, onSelectUser, unreadMap = {} }) {
                 )}
               </div>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <p className="font-semibold">{u.first_name} {u.last_name}</p>
-                  {isNew && (
+                  {isExtending && (
+                    <span className="text-[10px] font-bold bg-blue-500 text-white px-2 py-0.5 rounded-full animate-beat">EXTEND</span>
+                  )}
+                  {isNew && !isExtending && (
                     <span className="text-[10px] font-bold bg-neon text-black px-2 py-0.5 rounded-full animate-beat">NEW</span>
                   )}
-                  {!isNew && isEdited && (
+                  {!isNew && !isExtending && isEdited && (
                     <span className="text-[10px] font-bold bg-red-500 text-white px-2 py-0.5 rounded-full animate-beat">EDITED</span>
                   )}
                 </div>
@@ -154,11 +159,21 @@ function UserList({ users, onSelectUser, unreadMap = {} }) {
 // ============ User Detail ============
 function UserDetail({ userId, onBack, unreadCount = 0 }) {
   const [profile, setProfile] = useState(null)
+  const [archivedCycles, setArchivedCycles] = useState([])
+  const [programTabIndex, setProgramTabIndex] = useState(-1)
+  const [countdownTabIndex, setCountdownTabIndex] = useState(-1)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('info')
   const [program, setProgram] = useState([])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [, setTick] = useState(0)
+
+  // Tick every second so "Future Plan" label flips to "Current Plan" when previous ends
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(interval)
+  }, [])
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   useEffect(() => {
@@ -200,6 +215,10 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
     try {
       const { profile: p } = await api.adminGetUser(userId)
       setProfile(p)
+      try {
+        const c = await api.adminGetCycles(userId)
+        setArchivedCycles(c.cycles || [])
+      } catch {}
       if (p.training_program) {
         const prog = p.training_program.map((row, i) => ({
           ...row,
@@ -375,27 +394,76 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
               value={profile.goals?.length > 0 ? profile.goals.map((g) => goalLabels[g] || g).join(', ') : null} edited={(profile.edited_sections || []).includes('Goals')} />
             <InfoCard icon={Calendar} label="Training Days"
               value={profile.training_days?.length > 0 ? `${profile.training_days.length} days/week` : null} edited={(profile.edited_sections || []).includes('Training Schedule')} />
-            <InfoCard icon={Package} label="Package"
-              value={profile.selected_package ? packageLabels[profile.selected_package] : null} edited={(profile.edited_sections || []).includes('Package')} />
           </div>
 
-          {/* Program Countdown */}
-          {profile.program_start_date && (
-            <div className="bg-dark-card border border-dark-border rounded-xl p-5 mt-4 flex items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-3 mb-1">
-                  <Clock size={18} className="text-neon" />
-                  <h3 className="font-bold">Program Countdown</h3>
+          {/* Package + Program Countdown — combined per cycle */}
+          {(() => {
+            const lastArch = archivedCycles[archivedCycles.length - 1]
+            const previousPlanEnded = (() => {
+              if (!lastArch?.program_start_date) return true
+              const prevStart = new Date(lastArch.program_start_date.replace(' ', 'T') + 'Z')
+              const prevEnd = new Date(prevStart.getTime() + (lastArch.program_duration_days || 28) * MS_PER_DAY)
+              return new Date() >= prevEnd
+            })()
+            const currentIsFuture = profile.program_start_date
+              ? new Date(profile.program_start_date.replace(' ', 'T') + 'Z') > new Date() && !previousPlanEnded
+              : false
+            const currentCycle = (profile.selected_package || profile.program_start_date) ? {
+              cycle_number: 'current',
+              selected_package: profile.selected_package,
+              program_start_date: profile.program_start_date,
+              program_duration_days: profile.program_duration_days || 28,
+              isCurrent: true,
+              isFuture: currentIsFuture,
+            } : null
+            const archivedWithExtended = archivedCycles.map((c, i, arr) => ({
+              ...c,
+              wasExtended: i < arr.length - 1 || !!currentCycle,
+            }))
+            const allCycles = [...archivedWithExtended, ...(currentCycle ? [currentCycle] : [])]
+            if (allCycles.length === 0) return null
+            const lastIdx = allCycles.length - 1
+            // Default to previous plan when current is pending future start
+            const defaultIdx = (currentIsFuture && allCycles.length > 1) ? lastIdx - 1 : lastIdx
+            const safeIdx = countdownTabIndex < 0 ? defaultIdx : Math.min(countdownTabIndex, lastIdx)
+            const active = allCycles[safeIdx]
+            return (
+              <div className={`bg-dark-card border rounded-xl p-5 mt-4 relative ${active.isCurrent && (profile.edited_sections || []).includes('Package') ? 'border-red-500/40' : 'border-dark-border'}`}>
+                {active.isCurrent && (profile.edited_sections || []).includes('Package') && (
+                  <span className="absolute -top-2 right-2 text-[9px] font-bold bg-red-500 text-white px-1.5 py-0.5 rounded-full">EDITED</span>
+                )}
+                <PlanTabs cycles={allCycles} activeIndex={safeIdx} onSelect={setCountdownTabIndex} />
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <Package size={18} className="text-neon" />
+                      <h3 className="font-bold">Package</h3>
+                    </div>
+                    {active.selected_package ? (
+                      <p className="text-sm font-medium mb-3">{packageLabels[active.selected_package]}</p>
+                    ) : (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 mb-3 inline-block">Pending</span>
+                    )}
+                    {active.program_start_date && (
+                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                        <Clock size={12} />
+                        <span>Started on {new Date(active.program_start_date.replace(' ', 'T') + 'Z').toLocaleDateString()}</span>
+                      </div>
+                    )}
+                  </div>
+                  {active.program_start_date && (
+                    <Countdown
+                      startDate={active.program_start_date}
+                      durationDays={active.program_duration_days || 28}
+                      size={70}
+                      wasExtended={!!active.wasExtended}
+                      previousPlanEnded={active.isCurrent ? previousPlanEnded : false}
+                    />
+                  )}
                 </div>
-                <p className="text-xs text-gray-500">Started on {new Date(profile.program_start_date.replace(' ', 'T') + 'Z').toLocaleDateString()}</p>
               </div>
-              <Countdown
-                startDate={profile.program_start_date}
-                durationDays={profile.program_duration_days || 28}
-                size={60}
-              />
-            </div>
-          )}
+            )
+          })()}
 
           <div className={`bg-dark-card border rounded-xl p-5 mt-4 relative ${(profile.edited_sections || []).includes('Muscle Focus') ? 'border-red-500/40' : 'border-dark-border'}`}>
             {(profile.edited_sections || []).includes('Muscle Focus') && (
@@ -445,15 +513,43 @@ function UserDetail({ userId, onBack, unreadCount = 0 }) {
       )}
 
       {/* Program Tab */}
-      {tab === 'program' && (
-        <ProgramEditor
-          profile={profile}
-          program={program}
-          updateCell={updateCell}
-          saveProgram={saveProgram}
-          completedDays={profile.completed_days || {}}
-        />
-      )}
+      {tab === 'program' && (() => {
+        const currentPlan = (program && program.length > 0) ? {
+          cycle_number: 'current',
+          training_program: program,
+          completed_days: profile.completed_days || {},
+          isCurrent: true,
+        } : null
+        const allCycles = [...archivedCycles, ...(currentPlan ? [currentPlan] : [])]
+        const lastIdx = Math.max(0, allCycles.length - 1)
+        const safeIdx = programTabIndex < 0 ? lastIdx : Math.min(programTabIndex, lastIdx)
+        const active = allCycles[safeIdx]
+        const isViewingCurrent = active?.isCurrent
+
+        return (
+          <>
+            <PlanTabs cycles={allCycles} activeIndex={safeIdx} onSelect={setProgramTabIndex} />
+            {isViewingCurrent ? (
+              <ProgramEditor
+                profile={profile}
+                program={program}
+                updateCell={updateCell}
+                saveProgram={saveProgram}
+                completedDays={profile.completed_days || {}}
+              />
+            ) : active ? (
+              <ProgramEditor
+                profile={profile}
+                program={active.training_program || []}
+                updateCell={() => {}}
+                saveProgram={() => {}}
+                completedDays={active.completed_days || {}}
+                readOnly
+              />
+            ) : null}
+          </>
+        )
+      })()}
 
       {tab === 'chat' && (
         <AdminChat userId={userId} userName={profile.first_name} />
@@ -628,7 +724,7 @@ function PhotosTab({ profile }) {
 }
 
 // ============ Program Editor with Modal ============
-function ProgramEditor({ profile, program, updateCell, saveProgram, completedDays = {} }) {
+function ProgramEditor({ profile, program, updateCell, saveProgram, completedDays = {}, readOnly = false }) {
   const [editingCell, setEditingCell] = useState(null)
   const [editLabel, setEditLabel] = useState('')
   const [editDesc, setEditDesc] = useState('')
@@ -741,7 +837,7 @@ function ProgramEditor({ profile, program, updateCell, saveProgram, completedDay
                   const hasContent = cell.label || cell.description
                   return (
                     <td
-                      onClick={() => openEditor(dayIdx, 0)}
+                      onClick={() => { if (!readOnly) openEditor(dayIdx, 0) }}
                       className="px-2 py-2 cursor-pointer hover:bg-neon/5 transition-colors">
                       {hasContent ? (
                         <div>

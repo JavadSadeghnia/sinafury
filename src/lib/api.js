@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:3004/api'
+const API_URL = 'http://localhost:3005/api'
 
 function getToken() {
   return localStorage.getItem('sinafury_token')
@@ -83,6 +83,8 @@ export const api = {
   getProgramUpdated: () => request('/profile/program-updated'),
   markProgramSeen: () => request('/profile/program-seen', { method: 'POST' }),
   startCountdown: () => request('/profile/start-countdown', { method: 'POST' }),
+  resetPayment: () => request('/profile/reset-payment', { method: 'POST' }),
+  getCycles: () => request('/profile/cycles'),
 
   // Chat (user)
   getMessages: () => request('/chat'),
@@ -110,6 +112,11 @@ export const api = {
     body: JSON.stringify({ completedDays }),
   }),
 
+  updateCycleCompletedDays: (cycleNumber, completedDays) => request(`/profile/cycles/${cycleNumber}/completed`, {
+    method: 'PUT',
+    body: JSON.stringify({ completedDays }),
+  }),
+
   // File upload
   uploadFile: async (bucket, filename, file) => {
     const formData = new FormData()
@@ -121,7 +128,7 @@ export const api = {
   },
 
   // Get file URL
-  getFileUrl: (path) => path ? `http://localhost:3004/uploads/${path}` : null,
+  getFileUrl: (path) => path ? `http://localhost:3005/uploads/${path}` : null,
 
   // Admin — uses separate token storage
   adminSignIn: async (username, password) => {
@@ -184,6 +191,13 @@ export const api = {
   adminGetUser: (id) => {
     const token = localStorage.getItem('sinafury_admin_token')
     return fetch(`${API_URL}/admin/users/${id}`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d })
+  },
+
+  adminGetCycles: (userId) => {
+    const token = localStorage.getItem('sinafury_admin_token')
+    return fetch(`${API_URL}/admin/users/${userId}/cycles`, {
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     }).then(r => r.json()).then(d => { if (d.error) throw new Error(d.error); return d })
   },
