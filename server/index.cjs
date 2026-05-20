@@ -8,9 +8,10 @@ const jwt = require('jsonwebtoken')
 const multer = require('multer')
 
 const app = express()
-const PORT = 3005
-const JWT_SECRET = 'sinafury_secret_key_change_in_production_2024'
+const PORT = process.env.PORT || 3005
+const JWT_SECRET = process.env.JWT_SECRET || 'sinafury_secret_key_change_in_production_2024'
 const DB_PATH = path.join(__dirname, 'sinafury.db')
+const DIST_DIR = path.join(__dirname, '..', 'dist')
 
 // TEST MODE: 1 day = 10 seconds (set to 86400000 for real days)
 const MS_PER_DAY = 5000
@@ -1082,6 +1083,18 @@ app.post('/api/upload/:bucket/:filename', authenticate, upload.single('file'), (
 
   res.json({ path: relativePath, url: `/uploads/${relativePath}` })
 })
+
+// ============ SPA STATIC HOSTING ============
+
+// Serve the built React app from dist/ and let client-side routing handle non-API paths.
+if (fs.existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR))
+  app.use((req, res, next) => {
+    if (req.method !== 'GET') return next()
+    if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) return next()
+    res.sendFile(path.join(DIST_DIR, 'index.html'))
+  })
+}
 
 // ============ START ============
 

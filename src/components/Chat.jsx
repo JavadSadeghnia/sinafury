@@ -8,7 +8,7 @@ const EMOJI_LIST = [
   '🍎', '🥗', '🥩', '🥚', '💧', '☕', '🍌', '🥑', '🍗', '🥛',
 ]
 
-const SERVER_URL = 'http://localhost:3005'
+const SERVER_URL = import.meta.env.DEV ? 'http://localhost:3005' : ''
 
 function parseMessage(text) {
   const imageMatch = text.match(/^\[image:(\/uploads\/[^\]]+)\]$/)

@@ -1,4 +1,8 @@
-const API_URL = 'http://localhost:3005/api'
+// In dev, Vite runs on a different port from the API, so we hit the backend directly.
+// In production, Express serves the built SPA, so API + uploads are same-origin.
+const API_BASE = import.meta.env.DEV ? 'http://localhost:3005' : ''
+const API_URL = `${API_BASE}/api`
+const UPLOADS_URL = `${API_BASE}/uploads`
 
 function getToken() {
   return localStorage.getItem('sinafury_token')
@@ -128,7 +132,7 @@ export const api = {
   },
 
   // Get file URL
-  getFileUrl: (path) => path ? `http://localhost:3005/uploads/${path}` : null,
+  getFileUrl: (path) => path ? `${UPLOADS_URL}/${path}` : null,
 
   // Admin — uses separate token storage
   adminSignIn: async (username, password) => {
