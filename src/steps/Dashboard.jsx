@@ -164,6 +164,7 @@ function TrainingPage({ formData, goToStep, reloadProfile }) {
   const [modalInfo, setModalInfo] = useState(null)
   const [completedDays, setCompletedDays] = useState({})
   const [archivedCycles, setArchivedCycles] = useState([])
+  const [cyclesLoaded, setCyclesLoaded] = useState(false)
   const [activeTab, setActiveTab] = useState(0) // index into combined cycles list
 
   // Build combined list: archives first, then current
@@ -189,6 +190,7 @@ function TrainingPage({ formData, goToStep, reloadProfile }) {
       api.getCycles()
         .then((data) => setArchivedCycles(data.cycles || []))
         .catch(() => {})
+        .finally(() => setCyclesLoaded(true))
     }
   }, [user?.id])
 
@@ -288,11 +290,16 @@ function TrainingPage({ formData, goToStep, reloadProfile }) {
       <h2 className="text-2xl sm:text-3xl font-bold mb-2">Training Plan</h2>
       <p className="text-gray-500 mb-6">Your personalized {NUM_WEEKS}-week schedule</p>
 
-      <PlanTabs
-        cycles={cyclesWithPlaceholder}
-        activeIndex={safeActiveTab}
-        onSelect={setActiveTab}
-      />
+      {cyclesLoaded ? (
+        <PlanTabs
+          cycles={cyclesWithPlaceholder}
+          activeIndex={safeActiveTab}
+          onSelect={setActiveTab}
+          pendingExtend={archivedCycles.length > 0 && !hasCustomProgram}
+        />
+      ) : (
+        <div className="h-9 mb-4" />
+      )}
 
       {isViewingPlaceholder ? (
         <div className="flex flex-col items-center justify-center py-12">
@@ -424,11 +431,15 @@ function PendingSections({ sections, goToStep }) {
 
 function ProfilePage({ formData, goToStep, updateFormData, reloadProfile }) {
   const [archivedCycles, setArchivedCycles] = useState([])
+  const [cyclesLoaded, setCyclesLoaded] = useState(false)
   const [packageTabIndex, setPackageTabIndex] = useState(0)
   const [, setTick] = useState(0)
 
   useEffect(() => {
-    api.getCycles().then((d) => setArchivedCycles(d.cycles || [])).catch(() => {})
+    api.getCycles()
+      .then((d) => setArchivedCycles(d.cycles || []))
+      .catch(() => {})
+      .finally(() => setCyclesLoaded(true))
   }, [formData.programStartDate])
 
   // Re-evaluate "is future" every second so the tab label flips to "Current Plan" when the previous plan ends.
@@ -556,12 +567,16 @@ function ProfilePage({ formData, goToStep, updateFormData, reloadProfile }) {
             <h3 className="font-bold text-lg">Your Package</h3>
           </div>
 
-          <PlanTabs
-            cycles={allPackageCycles}
-            activeIndex={packageTabIndex}
-            onSelect={setPackageTabIndex}
-            pendingExtend={archivedCycles.length > 0 && !(formData.trainingProgram && formData.trainingProgram.some(row => row.weeks?.some(w => w.label || w.description)))}
-          />
+          {cyclesLoaded ? (
+            <PlanTabs
+              cycles={allPackageCycles}
+              activeIndex={packageTabIndex}
+              onSelect={setPackageTabIndex}
+              pendingExtend={archivedCycles.length > 0 && !(formData.trainingProgram && formData.trainingProgram.some(row => row.weeks?.some(w => w.label || w.description)))}
+            />
+          ) : (
+            <div className="h-9 mb-4" />
+          )}
 
           <div className="flex items-center justify-between gap-4">
             <div className="flex-1">
