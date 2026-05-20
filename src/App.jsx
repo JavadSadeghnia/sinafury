@@ -74,6 +74,7 @@ function App() {
 
   const [currentStep, setCurrentStep] = useState(() => getStepFromPath(location.pathname))
   const [formData, setFormData] = useState({ ...DEFAULT_FORM })
+  const [profileLoading, setProfileLoading] = useState(false)
 
   // Load profile when user changes
   useEffect(() => {
@@ -84,9 +85,11 @@ function App() {
       profileLoadedRef.current = false
 
       if (currentId) {
+        setProfileLoading(true)
         loadProfile()
       } else {
         setFormData({ ...DEFAULT_FORM })
+        setProfileLoading(false)
       }
     }
   }, [user])
@@ -129,6 +132,7 @@ function App() {
       }))
     }
     profileLoadedRef.current = true
+    setProfileLoading(false)
   }
 
   // Save profile to API
@@ -218,7 +222,8 @@ function App() {
   const goToStep = (step) => setCurrentStep(step)
   const stepProps = { formData, updateFormData, next, back, goToStep, saveProfile, reloadProfile: loadProfile }
 
-  if (loading) {
+  const onDashboard = location.pathname.startsWith('/dashboard')
+  if (loading || (onDashboard && user?.id && profileLoading)) {
     return (
       <div className="min-h-screen bg-dark flex items-center justify-center">
         <div className="w-10 h-10 border-2 border-neon border-t-transparent rounded-full animate-spin" />

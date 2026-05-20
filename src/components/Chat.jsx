@@ -144,8 +144,8 @@ export default function Chat({ messages, onSend, onSendImage, isAdmin = false, p
       )}
 
       {/* Input */}
-      <div className="shrink-0 border-t border-dark-border px-4 py-3 bg-dark-card">
-        <div className="flex items-center gap-2">
+      <div className="shrink-0 border-t border-dark-border px-2 sm:px-4 py-3 bg-dark-card">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <button
             onClick={() => setShowEmoji(!showEmoji)}
             className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
@@ -174,7 +174,7 @@ export default function Chat({ messages, onSend, onSendImage, isAdmin = false, p
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
             onFocus={() => setShowEmoji(false)}
             placeholder="Type a message..."
-            className="flex-1 bg-dark-surface border border-dark-border rounded-xl px-4 py-2.5 text-white text-sm placeholder-gray-600 focus:outline-none focus:border-neon"
+            className="flex-1 min-w-0 bg-dark-surface border border-dark-border rounded-xl px-4 py-2.5 text-white text-sm placeholder-gray-600 focus:outline-none focus:border-neon"
           />
           <button
             onClick={handleSend}
