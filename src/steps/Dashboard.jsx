@@ -110,7 +110,7 @@ function DetailModal({ title, description: customDesc, cellKey, isDone, onToggle
     >
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
-        className="relative bg-dark-card border border-dark-border rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-[0_0_40px_rgba(0,0,0,0.5)]"
+        className="relative bg-dark-card border border-dark-border rounded-2xl p-6 sm:p-8 max-w-md w-full max-h-[85vh] flex flex-col shadow-[0_0_40px_rgba(0,0,0,0.5)]"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -120,20 +120,22 @@ function DetailModal({ title, description: customDesc, cellKey, isDone, onToggle
           <X size={20} />
         </button>
 
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 shrink-0">
           <div className="w-8 h-8 rounded-lg bg-neon flex items-center justify-center shrink-0">
             <Dumbbell size={16} className="text-black" />
           </div>
           <h3 className="text-lg font-bold text-neon">{title}</h3>
         </div>
 
-        <p className="text-gray-300 text-sm leading-relaxed mb-6">
-          {description}
-        </p>
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 mb-6">
+          <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
+            {description}
+          </p>
+        </div>
 
         <button
           onClick={() => onToggleDone(cellKey)}
-          className={`w-full flex items-center justify-center gap-3 py-3 rounded-xl border-2 transition-all cursor-pointer ${
+          className={`shrink-0 w-full flex items-center justify-center gap-3 py-3 rounded-xl border-2 transition-all cursor-pointer ${
             isDone
               ? 'bg-green-500/20 border-green-500 text-green-400'
               : 'bg-dark-surface border-dark-border text-gray-400 hover:border-gray-500'
